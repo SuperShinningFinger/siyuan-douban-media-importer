@@ -1,0 +1,41 @@
+{
+  "name": "siyuan-media-importer",
+  "author": "79117",
+  "url": "",
+  "version": "0.1.0",
+  "minAppVersion": "3.0.12",
+  "backends": [
+    "windows",
+    "linux",
+    "darwin",
+    "ios",
+    "android",
+    "harmony",
+    "docker"
+  ],
+  "frontends": [
+    "desktop",
+    "mobile",
+    "browser-desktop",
+    "browser-mobile",
+    "desktop-window"
+  ],
+  "displayName": {
+    "en_US": "Douban Media Importer",
+    "zh_CN": "豆瓣书影音导入助手"
+  },
+  "description": {
+    "en_US": "Import book, movie, TV/anime and music info from Douban into SiYuan databases, and generate note templates.",
+    "zh_CN": "从豆瓣导入书籍、电影、电视剧/动画、音乐信息到思源数据库，并生成感想笔记模板。"
+  },
+  "keywords": [
+    "豆瓣",
+    "书影音",
+    "书籍",
+    "电影",
+    "电视剧",
+    "动画",
+    "音乐",
+    "数据库"
+  ]
+}
