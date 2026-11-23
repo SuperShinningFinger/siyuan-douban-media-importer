@@ -1,5 +1,6 @@
 import { Dialog, Plugin } from "siyuan";
 import ImportPanel from "./components/ImportPanel.svelte";
+import { ICON_PNG_BASE64 } from "./assets/icon-base64";
 import { DEFAULT_SETTINGS, type MediaSettings } from "./types";
 import { importMedia } from "./utils/importer";
 
@@ -10,8 +11,9 @@ export default class MediaImporterPlugin extends Plugin {
     private panel: ImportPanel | null = null;
 
     async onload() {
-        this.addIcons(`<symbol id="iconMediaImporter" viewBox="0 0 1024 1024">
-            <path d="M853.3 170.7H170.7C123.7 170.7 85.3 209.1 85.3 256v512c0 46.9 38.4 85.3 85.4 85.3h682.6c47 0 85.4-38.4 85.4-85.3V256c0-46.9-38.4-85.3-85.4-85.3zm-42.6 555H213.3V298.7h597.4v427zM298.7 384h170.6v170.7H298.7zm213.3 0h213.3v42.7H512zm0 85.3h170.7v42.7H512zm0 85.4h213.3v42.6H512z" fill="currentColor"/>
+        // 顶栏使用商店图标的彩色缩略图（内嵌 base64，避免相对路径加载失败）
+        this.addIcons(`<symbol id="iconMediaImporter" viewBox="0 0 160 160">
+            <image width="160" height="160" href="data:image/png;base64,${ICON_PNG_BASE64}" />
         </symbol>`);
 
         this.addTopBar({
