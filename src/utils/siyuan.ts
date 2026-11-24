@@ -236,6 +236,38 @@ export async function fetchImageAsDataUrl(url: string): Promise<string> {
     }
 }
 
+/**
+ * 通过思源后端代理抓取网页 HTML 文本（Docker/手机等无 webview 环境用）。
+ * forwardProxy 返回 base64 body，这里按 UTF-8 解码成字符串。
+ */
+export async function fetchTextViaProxy(url: string, referer?: string): Promise<string> {
+    if (!url) return "";
+    const resp: any = await fetchSyncPost("/api/network/forwardProxy", {
+        url,
+        method: "GET",
+        timeout: 15000,
+        headers: [
+            {
+                "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+            },
+            { Referer: referer || "https://www.douban.com/" },
+        ],
+        payload: "",
+        payloadEncoding: "text",
+        responseEncoding: "base64",
+    });
+    const data = resp?.data && typeof resp.data === "object" ? resp.data : resp;
+    if (!data?.body) throw new Error(`代理返回为空（status ${data?.status || "?"}）`);
+    if (data.status && data.status >= 400) {
+        throw new Error(`豆瓣页面请求失败（HTTP ${data.status}），请在桌面端使用内置浏览器导入`);
+    }
+    const bin = atob(data.body);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder("utf-8").decode(bytes);
+}
+
 function safeFileName(name: string): string {
     return (
         name

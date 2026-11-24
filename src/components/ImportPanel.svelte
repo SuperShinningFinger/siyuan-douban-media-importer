@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount, tick } from "svelte";
-    import { showMessage } from "siyuan";
+    import { getFrontend, showMessage } from "siyuan";
     import {
         DEFAULT_SETTINGS,
         DOUBAN_HOME,
@@ -9,10 +9,11 @@
         type MediaSettings,
         type MediaType,
     } from "../types";
-    import { buildExtractor } from "../utils/extractor";
+    import { buildExtractor, extractFromHtml } from "../utils/extractor";
     import { DEFAULT_TEMPLATE, TEMPLATE_VARIABLES } from "../utils/template";
     import {
         fetchImageAsDataUrl,
+        fetchTextViaProxy,
         listAttributeViews,
         listNotebooks,
         toArray,
@@ -47,6 +48,12 @@
         : avList;
 
     const mediaTypes: MediaType[] = ["book", "movie", "tv", "music"];
+    // 内置浏览器是 Electron 专有能力，仅桌面端可用；Docker / 手机 / 浏览器前端走 URL 抓取
+    const frontend = getFrontend();
+    const hasWebview = frontend === "desktop" || frontend === "desktop-window";
+    const platformHint = hasWebview
+        ? "桌面端可用内置浏览器，或用地址栏从 URL 提取"
+        : "当前端无内置浏览器，请用地址栏「从 URL 提取」导入";
     // 用 Edge UA（实测 Edge 能正常显示豆瓣封面），减少豆瓣对嵌入式浏览器的拦截
     const browserUA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
@@ -149,6 +156,10 @@
     }
 
     function openBrowser() {
+        if (!hasWebview) {
+            status = "当前端不支持内置浏览器，请用下方地址栏的“从 URL 提取”。";
+            return;
+        }
         currentUrl = DOUBAN_HOME[type];
         showBrowser = true;
         status = "请在内置浏览器中打开豆瓣详情页，然后点击“从当前页面提取”。";
@@ -156,6 +167,11 @@
 
     function navigate() {
         if (!currentUrl) return;
+        // 非桌面端没有 webview，“前往”引导用代理抓取
+        if (!hasWebview) {
+            status = "当前端无内置浏览器，请直接点“从 URL 提取”。";
+            return;
+        }
         showBrowser = true;
     }
 
@@ -183,35 +199,70 @@
         }
     }
 
+    /** 提取后的公共处理：下载封面 + 状态提示（两条提取路径共用）。 */
+    async function applyExtracted(parsed: any, patchCover: boolean) {
+        info = { ...parsed, type } as MediaInfo;
+        // 豆瓣图片有防盗链，统一由思源后端代理下载
+        if (info && !info.coverDataUrl && info.coverUrl) {
+            const dataUrl = await fetchImageAsDataUrl(info.coverUrl);
+            if (dataUrl) {
+                info = { ...info, coverDataUrl: dataUrl };
+                if (patchCover) await patchWebviewCover(dataUrl);
+            }
+        }
+        status = info?.coverDataUrl
+            ? `提取成功：${info.title}（封面已就绪）`
+            : `提取成功：${info.title}（封面下载失败，将使用远程链接）`;
+    }
+
     async function extract() {
         if (!webview) {
             status = "请先打开内置浏览器。";
             return;
         }
         if (typeof webview.executeJavaScript !== "function") {
-            status = "当前环境不支持页面提取，请在思源桌面端使用。";
+            status = "当前环境不支持内置浏览器提取，请使用地址栏下方的“从 URL 提取”。";
             return;
         }
         busy = true;
         status = "正在提取页面信息……";
         try {
             const raw = await webview.executeJavaScript(buildExtractor(type));
-            const parsed = JSON.parse(raw);
-            info = { ...parsed, type } as MediaInfo;
-            // webview 内图片被豆瓣防盗链拦截，改由思源后端代理下载
-            if (info && !info.coverDataUrl && info.coverUrl) {
-                const dataUrl = await fetchImageAsDataUrl(info.coverUrl);
-                if (dataUrl) {
-                    info = { ...info, coverDataUrl: dataUrl };
-                    // 把封面注入回 webview 页面，替换被豆瓣拦截的裂图
-                    await patchWebviewCover(dataUrl);
-                }
-            }
-            status = info?.coverDataUrl
-                ? `提取成功：${info.title}（封面已就绪）`
-                : `提取成功：${info.title}（封面下载失败，将使用远程链接）`;
+            await applyExtracted(JSON.parse(raw), true);
         } catch (error: any) {
             status = `提取失败：${error?.message || error}`;
+        } finally {
+            busy = false;
+        }
+    }
+
+    /** 无 webview 环境（Docker / 手机 / 浏览器前端）：经思源后端代理抓取详情页 HTML 并解析。 */
+    async function extractFromUrl() {
+        const url = currentUrl.trim();
+        if (!url) {
+            status = "请先在地址栏填入豆瓣详情页地址。";
+            return;
+        }
+        let parsedUrl: URL;
+        try {
+            parsedUrl = new URL(url);
+        } catch {
+            status = "地址格式不正确，请填入完整地址，例如 https://book.douban.com/subject/1234567/";
+            return;
+        }
+        if (!/^https?:\/\/(www\.)?[\w-]*douban\.com$/.test(parsedUrl.hostname)) {
+            status = "只有豆瓣页面（douban.com）支持导入。";
+            return;
+        }
+        busy = true;
+        status = "正在通过思源后端抓取豆瓣页面……";
+        try {
+            const referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
+            const html = await fetchTextViaProxy(url, referer);
+            const parsed = extractFromHtml(html, url, type);
+            await applyExtracted(parsed, false);
+        } catch (error: any) {
+            status = `提取失败：${error?.message || error}。若豆瓣要求验证，请在桌面端使用内置浏览器导入。`;
         } finally {
             busy = false;
         }
@@ -426,23 +477,36 @@
         </div>
     {/if}
 
-    <div class="mi-row mi-actions">
-        <button class="b3-button b3-button--outline" on:click={openBrowser}>打开豆瓣</button>
-        <button class="b3-button" disabled={busy || !showBrowser} on:click={extract}>
-            从当前页面提取
-        </button>
-        <button class="b3-button b3-button--outline" disabled={busy || !info} on:click={doImport}>
-            导入思源
-        </button>
-    </div>
+    {#if hasWebview}
+        <div class="mi-row mi-actions">
+            <button class="b3-button b3-button--outline" on:click={openBrowser}>打开豆瓣</button>
+            <button class="b3-button" disabled={busy || !showBrowser} on:click={extract}>
+                从当前页面提取
+            </button>
+            <button class="b3-button b3-button--outline" disabled={busy || !info} on:click={doImport}>
+                导入思源
+            </button>
+        </div>
+    {/if}
 
     <div class="mi-row mi-address">
-        <input bind:value={currentUrl} placeholder="豆瓣页面地址" />
-        <button class="b3-button b3-button--outline" on:click={navigate}>前往</button>
+        <input bind:value={currentUrl} placeholder="豆瓣详情页地址，例如 https://book.douban.com/subject/1234567/" />
+        {#if hasWebview}
+            <button class="b3-button b3-button--outline" disabled={busy} on:click={navigate}>前往</button>
+        {/if}
+        <button class="b3-button" class:mi-primary-action={!hasWebview} disabled={busy} on:click={extractFromUrl}>
+            从 URL 提取
+        </button>
+        {#if !hasWebview}
+            <button class="b3-button b3-button--outline" disabled={busy || !info} on:click={doImport}>
+                导入思源
+            </button>
+        {/if}
+        <span class="mi-hint">{platformHint}</span>
     </div>
 
-    <div class="mi-main">
-        {#if showBrowser}
+    <div class="mi-main" class:mi-main-solo={!hasWebview}>
+        {#if hasWebview && showBrowser}
             <webview
                 bind:this={webview}
                 src={currentUrl}
@@ -478,11 +542,21 @@
                     {/each}
                 </div>
             </div>
+        {:else}
+            <div class="mi-empty">
+                <div class="mi-empty-icon">📚</div>
+                <div class="mi-empty-title">{hasWebview ? "尚未提取媒体信息" : "从豆瓣详情页地址开始"}</div>
+                <div class="mi-empty-hint">
+                    {hasWebview
+                        ? "点击「打开豆瓣」，在详情页提取；或把详情页地址填进上方地址栏。"
+                        : "在浏览器打开豆瓣详情页，复制地址到上方输入框，点「从 URL 提取」。"}
+                </div>
+            </div>
         {/if}
     </div>
 
     <div class="mi-status" class:mi-error={status.startsWith("提取失败") || status.startsWith("导入失败")}>
-        {status || "请选择媒体类型，然后在内置浏览器中打开豆瓣详情页。"}
+        {status || (hasWebview ? "请选择媒体类型，然后在内置浏览器中打开豆瓣详情页。" : "请选择媒体类型，然后粘贴豆瓣详情页地址。")}
     </div>
 </div>
 
@@ -584,6 +658,40 @@
         display: flex;
         gap: 8px;
         min-height: 0;
+    }
+    .mi-main-solo .mi-preview {
+        flex: 1 1 100%;
+    }
+    .mi-primary-action {
+        background: var(--b3-theme-primary);
+        color: var(--b3-theme-on-primary);
+    }
+    .mi-empty {
+        flex: 1 1 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        text-align: center;
+        color: var(--b3-theme-on-surface);
+        border: 1px dashed var(--b3-border-color);
+        border-radius: 6px;
+        padding: 24px;
+    }
+    .mi-empty-icon {
+        font-size: 40px;
+        line-height: 1;
+    }
+    .mi-empty-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--b3-theme-on-background);
+    }
+    .mi-empty-hint {
+        font-size: 12px;
+        max-width: 420px;
+        line-height: 1.6;
     }
     .mi-webview {
         flex: 1 1 58%;
