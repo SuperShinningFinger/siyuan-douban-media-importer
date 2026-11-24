@@ -49,38 +49,22 @@ export default class MediaImporterPlugin extends Plugin {
             this.dialog.destroy();
             this.dialog = null;
         }
-        const initial = this.computeDialogSize();
-        let onResize: () => void = () => {};
+        // 尺寸只通过 Dialog 官方的 width/height 参数传入（作用于内部
+        // .b3-dialog__container）。不要给 dialog.element（外层 .b3-dialog--open
+        // 遮罩）写内联样式或用 !important 覆盖，否则会破坏全局弹窗布局。
+        const { width, height } = this.computeDialogSize();
         const dialog = new Dialog({
             title: "豆瓣书影音导入助手",
             content: `<div class="mi-dialog-root" style="width:100%;height:100%;min-height:0;"></div>`,
-            width: initial.width,
-            height: initial.height,
+            width,
+            height,
             destroyCallback: () => {
-                window.removeEventListener("resize", onResize);
                 this.panel?.$destroy();
                 this.panel = null;
                 this.dialog = null;
             },
         });
         this.dialog = dialog;
-        onResize = () => {
-            const { width, height } = this.computeDialogSize();
-            // 思源不同版本把尺寸写在 dialog 根节点或内部容器上，两处都同步；
-            // 主题里的 max-width/max-height 会把弹窗压小，用 important 覆盖。
-            const apply = (el: HTMLElement | null) => {
-                if (!el) return;
-                el.style.setProperty("width", width, "important");
-                el.style.setProperty("height", height, "important");
-                el.style.setProperty("max-width", "none", "important");
-                el.style.setProperty("max-height", "none", "important");
-            };
-            apply(dialog.element);
-            apply(dialog.element.querySelector(".b3-dialog__container"));
-        };
-        // 创建后立即应用一次，不能只等 resize 事件
-        onResize();
-        window.addEventListener("resize", onResize);
         const target = dialog.element.querySelector(".mi-dialog-root") as HTMLElement;
         this.panel = new ImportPanel({
             target,
