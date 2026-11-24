@@ -1,8 +1,12 @@
 {
   "name": "siyuan-media-importer",
   "author": "79117",
-  "url": "",
-  "version": "0.1.0",
+  "url": "https://github.com/SuperShinningFinger/siyuan-douban-media-importer",
+  "version": "0.1.1",
+  "readme": {
+    "default": "README.md",
+    "zh_CN": "README.md"
+  },
   "minAppVersion": "3.0.12",
   "backends": [
     "windows",

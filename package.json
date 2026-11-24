@@ -1,6 +1,6 @@
 {
   "name": "siyuan-media-importer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "从豆瓣导入书籍、电影、电视剧/动画、音乐信息到思源笔记数据库并生成感想模板",
   "repository": "",
