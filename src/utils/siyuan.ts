@@ -67,26 +67,63 @@ export async function listAttributeViews(): Promise<AttributeViewOption[]> {
     return Array.from(seen.values());
 }
 
-/** 通过 AV ID 查找数据库载体块（数据库所在文档里的 NodeAttributeView 块）。 */
-export async function findAttributeViewCarrier(avId: string): Promise<string> {
-    const stmt = `SELECT id FROM blocks WHERE type = 'av' AND markdown LIKE '%${avId}%' LIMIT 1`;
-    const rows = await apiPost<any[]>(`/api/query/sql`, { stmt });
-    if (!Array.isArray(rows) || !rows.length || !rows[0]?.id) {
-        throw new Error(`找不到数据库载体块，请确认数据库 ${avId} 已在思源中打开`);
+/** 复制一个数据库，返回新库 ID 与其载体块 ID（内核会即时生成完整字段定义）。 */
+export async function duplicateAttributeView(sourceAvId: string): Promise<{ avID: string; blockID: string }> {
+    const data = await apiPost<any>("/api/av/duplicateAttributeViewBlock", { avID: sourceAvId });
+    if (!data?.avID || !data?.blockID) {
+        throw new Error("复制数据库失败，请确认模板数据库可用");
     }
-    return rows[0].id;
+    return { avID: String(data.avID), blockID: String(data.blockID) };
+}
+
+/** 读取一个数据库的全部定义与数据，用于清理复制库带过来的行。 */
+export async function getAttributeView(avId: string): Promise<any | null> {
+    const data = await apiPost<any>("/api/av/getAttributeView", { id: avId });
+    return data?.av || null;
+}
+
+/** 从数据库中解绑一批文档块（会同时删除对应的行）。 */
+export async function removeAttributeViewBlocks(avId: string, srcIds: string[]): Promise<void> {
+    if (!srcIds.length) return;
+    await apiPost("/api/av/removeAttributeViewBlocks", { avID: avId, srcIDs: srcIds });
+}
+
+/** 在指定文档末尾插入一个块（markdown 或 html）。 */
+export async function appendBlock(parentId: string, data: string, dataType: "markdown" | "html" = "markdown"): Promise<void> {
+    await apiPost("/api/block/appendBlock", { parentID: parentId, data, dataType });
+}
+
+/** 通过 AV ID 查找数据库载体块（数据库所在文档里的 NodeAttributeView 块）。 */
+export async function findAttributeViewCarrier(avId: string, retries = 5): Promise<string> {
+    const stmt = `SELECT id FROM blocks WHERE type = 'av' AND markdown LIKE '%${avId}%' LIMIT 1`;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const rows = await apiPost<any[]>(`/api/query/sql`, { stmt });
+        if (Array.isArray(rows) && rows.length && rows[0]?.id) {
+            return rows[0].id;
+        }
+        if (attempt < retries) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+    }
+    throw new Error(`找不到数据库载体块，请确认数据库 ${avId} 已在思源中打开`);
 }
 
 export async function createDocWithMd(notebookId: string, path: string, markdown: string): Promise<string> {
-    const result = await apiPost<string>("/api/filetree/createDocWithMd", {
-        notebook: notebookId,
-        path,
-        markdown,
-    });
-    if (typeof result !== "string") {
-        throw new Error("创建文档失败：未返回文档 ID");
+    // 思源偶尔返回 "document metadata is not ready"（父目录元数据未就绪），重试即可
+    for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+            const result = await apiPost<string>("/api/filetree/createDocWithMd", {
+                notebook: notebookId,
+                path,
+                markdown,
+            });
+            if (typeof result === "string" && result) return result;
+        } catch {
+            // 下面重试
+        }
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 300));
     }
-    return result;
+    throw new Error("创建文档失败，请确认笔记本可用且路径无误");
 }
 
 export async function renameDocById(id: string, title: string): Promise<void> {

@@ -90,6 +90,11 @@ export default class MediaImporterPlugin extends Plugin {
     }
 
     async importMedia(info: any, settings: MediaSettings) {
-        return importMedia(info, settings);
+        return importMedia(info, settings, {
+            onDatabaseInitialized: async (type, avId, notePath) => {
+                settings.database[type] = { avId, notePath };
+                await this.saveSettings(settings);
+            },
+        });
     }
 }

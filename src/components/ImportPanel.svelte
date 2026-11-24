@@ -72,7 +72,7 @@
         }
         settings = { ...settings, notebookId: id, database };
         if (cleared) {
-            status = `已切换到「${name}」，请重新选择该笔记本内的 ${cleared} 个数据库。`;
+            status = `已切换到「${name}」，${cleared} 个数据库需重新指定；留空时导入会自动在该笔记本下新建数据库。`;
         }
     }
 
@@ -246,6 +246,11 @@
             status = "请先提取并确认媒体信息。";
             return;
         }
+        if (!settings.notebookId) {
+            status = "尚未指定笔记本，请在设置中选择「数据库所在笔记本」后再导入。";
+            showSettings = true;
+            return;
+        }
         busy = true;
         status = "正在创建笔记并写入数据库……";
         try {
@@ -254,6 +259,8 @@
                 if (key in payload) payload[key] = toArray(payload[key]);
             }
             const result = await plugin.importMedia(payload as MediaInfo, settings);
+            // 自动建库后刷新列表，让设置面板能看到新数据库
+            avList = await listAttributeViews().catch(() => avList);
             status = `导入完成：${info.title}（文档 ${result.docId}）`;
             showMessage(`已导入《${info.title}》`);
         } catch (error: any) {
