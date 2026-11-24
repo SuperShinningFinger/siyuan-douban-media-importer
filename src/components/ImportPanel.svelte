@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from "svelte";
+    import { onMount, tick } from "svelte";
     import { showMessage } from "siyuan";
     import {
         DEFAULT_SETTINGS,
@@ -10,6 +10,7 @@
         type MediaType,
     } from "../types";
     import { buildExtractor } from "../utils/extractor";
+    import { DEFAULT_TEMPLATE, TEMPLATE_VARIABLES } from "../utils/template";
     import {
         fetchImageAsDataUrl,
         listAttributeViews,
@@ -33,6 +34,11 @@
     let showSettings = false;
     let notebooks: NotebookOption[] = [];
     let avList: AttributeViewOption[] = [];
+    // 感想模板编辑：按媒体类型分别保存，缺省时使用内置默认模板
+    let templateType: MediaType = "book";
+    let templateDraft: string = DEFAULT_TEMPLATE;
+    let templateTextarea: HTMLTextAreaElement;
+    const templatePlaceholder = "用 {{title}}、{{summary}} 等变量自由排版，支持 Markdown 和思源块属性语法";
 
     // 数据库按当前笔记本过滤：hPath 第一段就是笔记本名；列表未加载时先显示全部
     $: currentNotebookName = notebooks.find((n) => n.id === settings.notebookId)?.name || "";
@@ -47,6 +53,7 @@
 
     onMount(async () => {
         settings = await plugin.getSettings();
+        templateDraft = settings.templates?.[templateType] || DEFAULT_TEMPLATE;
         currentUrl = DOUBAN_HOME[type];
         const [nb, avs] = await Promise.all([
             listNotebooks().catch(() => []),
@@ -94,6 +101,42 @@
                 [t]: { ...settings.database[t], avId, notePath },
             },
         };
+    }
+
+    /** 切换正在编辑的媒体类型：先把当前草稿存回内存设置，再载入该类型的模板。 */
+    function selectTemplateType(value: string) {
+        settings = {
+            ...settings,
+            templates: { ...settings.templates, [templateType]: templateDraft },
+        };
+        templateType = value as MediaType;
+        templateDraft = settings.templates?.[templateType] || DEFAULT_TEMPLATE;
+    }
+
+    function updateTemplate(value: string) {
+        templateDraft = value;
+        settings = {
+            ...settings,
+            templates: { ...settings.templates, [templateType]: value },
+        };
+    }
+
+    function resetTemplate() {
+        updateTemplate(DEFAULT_TEMPLATE);
+        status = `已恢复「${MEDIA_LABELS[templateType]}」的内置默认模板，点击“保存设置”可持久化。`;
+    }
+
+    /** 在光标处插入 {{变量}}，方便用户不用记变量名。 */
+    async function insertVariable(name: string) {
+        const token = `{{${name}}}`;
+        const start = templateTextarea?.selectionStart ?? templateDraft.length;
+        const end = templateTextarea?.selectionEnd ?? templateDraft.length;
+        updateTemplate(templateDraft.slice(0, start) + token + templateDraft.slice(end));
+        await tick();
+        if (templateTextarea) {
+            templateTextarea.focus();
+            templateTextarea.setSelectionRange(start + token.length, start + token.length);
+        }
     }
 
     $: if (webview && !eventsAttached) {
@@ -344,6 +387,41 @@
                     />
                 </div>
             {/each}
+            <div class="mi-template-section">
+                <div class="mi-row">
+                    <span class="mi-setting-label">感想模板</span>
+                    <select
+                        value={templateType}
+                        on:change={(e) => selectTemplateType(e.currentTarget.value)}
+                    >
+                        {#each mediaTypes as item}
+                            <option value={item}>{MEDIA_LABELS[item]}</option>
+                        {/each}
+                    </select>
+                    <button class="b3-button b3-button--text" on:click={resetTemplate}>恢复默认</button>
+                    <span class="mi-hint">支持 &#123;&#123;变量&#125;&#125;，按媒体类型分别保存</span>
+                </div>
+                <textarea
+                    class="mi-template-input"
+                    bind:this={templateTextarea}
+                    value={templateDraft}
+                    on:input={(e) => updateTemplate(e.currentTarget.value)}
+                    placeholder={templatePlaceholder}
+                    spellcheck="false"
+                ></textarea>
+                <div class="mi-template-vars">
+                    <span class="mi-hint">插入变量：</span>
+                    {#each TEMPLATE_VARIABLES as variable}
+                        <button
+                            class="b3-button b3-button--text mi-var"
+                            title={variable.label}
+                            on:click={() => insertVariable(variable.name)}
+                        >
+                            {variable.name}
+                        </button>
+                    {/each}
+                </div>
+            </div>
             <button class="b3-button b3-button--outline" on:click={saveSettings}>保存设置</button>
         </div>
     {/if}
@@ -466,6 +544,39 @@
         font-size: 12px;
         white-space: nowrap;
         color: var(--b3-theme-on-surface);
+    }
+    .mi-template-section {
+        border-top: 1px solid var(--b3-border-color);
+        padding-top: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .mi-hint {
+        font-size: 11px;
+        color: var(--b3-theme-on-surface);
+    }
+    .mi-template-input {
+        width: 100%;
+        min-height: 108px;
+        max-height: 220px;
+        resize: vertical;
+        box-sizing: border-box;
+        font-family: var(--b3-font-family-code, monospace);
+        font-size: 12px;
+        line-height: 1.5;
+    }
+    .mi-template-vars {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 2px 4px;
+        max-height: 54px;
+        overflow: auto;
+    }
+    .mi-var {
+        padding: 1px 4px;
+        font-size: 11px;
     }
     /* 浏览器与预览共用一个弹性区域，随窗口伸缩 */
     .mi-main {

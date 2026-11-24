@@ -60,7 +60,7 @@ export async function importMedia(
     );
 
     const carrierBlockId = await findAttributeViewCarrier(config.avId);
-    const markdown = buildNoteMarkdown(info, coverPath);
+    const markdown = buildNoteMarkdown(info, coverPath, settings.templates?.[info.type]);
     const docPath = `${config.notePath.replace(/\/$/, "")}/${info.title}`;
 
     const docId = await createDocWithMd(settings.notebookId, docPath, markdown);

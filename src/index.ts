@@ -82,6 +82,9 @@ export default class MediaImporterPlugin extends Plugin {
                 ...DEFAULT_SETTINGS.database,
                 ...(saved.database || {}),
             },
+            templates: {
+                ...(saved.templates || {}),
+            },
         };
     }
 

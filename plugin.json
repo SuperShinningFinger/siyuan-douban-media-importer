@@ -1,8 +1,8 @@
 {
   "name": "siyuan-media-importer",
-  "author": "79117",
+  "author": "Myisking",
   "url": "https://github.com/SuperShinningFinger/siyuan-douban-media-importer",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "readme": {
     "default": "README.md",
     "zh_CN": "README.md"
