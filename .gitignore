@@ -10,3 +10,4 @@ build
 tmp
 .workbuddy
 vite.config.ts.timestamp-*.mjs
+提交PR说明.md
