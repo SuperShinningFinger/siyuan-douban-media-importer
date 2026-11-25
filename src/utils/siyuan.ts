@@ -320,13 +320,61 @@ export async function fetchTextViaProxy(url: string, referer?: string, userAgent
     return html;
 }
 
-function safeFileName(name: string): string {
-    return (
-        name
-            .replace(/[\\/:*?"<>|\r\n\t]/g, "_")
-            .replace(/\s+/g, "_")
-            .slice(0, 60) || "cover"
-    );
+/** 按 UTF-8 字节数截断，避免截在代理对中间产生无效字符。 */
+function truncateUtf8Bytes(text: string, maxBytes: number): string {
+    let out = "";
+    let used = 0;
+    for (const ch of Array.from(text)) {
+        const cp = ch.codePointAt(0) ?? 0;
+        const size = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+        if (used + size > maxBytes) break;
+        out += ch;
+        used += size;
+    }
+    return out;
+}
+
+/**
+ * 对齐思源内核 util.FilterUploadFileName 的校验规则。
+ * 内核对 /api/file/putFile 的新文件校验 name === FilterUploadFileName(name)，
+ * 否则返回 400 "invalid file path"（issue #14658）。
+ * 电影标题里常见的 ()、#、&、% 等都会触发，必须在这里提前过滤。
+ */
+export function safeFileName(name: string): string {
+    let ret = (name || "")
+        .replace(/[\\/:*?"'<>|]/g, "_") // FilterFileName：非法字符替换为下划线
+        .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "") // 零宽字符直接移除
+        .replace(/\u00A0/g, " ")
+        .replace(/[\u0000-\u001F\u007F]/g, "") // 不可打印控制字符
+        .replace(/\uFFFD/g, "_")
+        .replace(/[~\[\]()!`&{}=#%$;]/g, "_") // FilterUploadFileName 会删除这些字符
+        .replace(/\s+/g, "_")
+        .trim()
+        .replace(/\.+$/, "");
+    if (!ret) ret = "cover";
+    // 内核限制文件名 189 字节，给时间戳 ID 和扩展名留足余量
+    return truncateUtf8Bytes(ret, 120);
+}
+
+async function tryPutCover(
+    path: string,
+    fileName: string,
+    bytes: Uint8Array,
+    mime: string,
+): Promise<boolean> {
+    try {
+        const formData = new FormData();
+        formData.append("path", `/data/${path}`);
+        const body = new Uint8Array(bytes).buffer as ArrayBuffer;
+        formData.append("file", new File([body], fileName, { type: mime }));
+        await apiPost("/api/file/putFile", formData);
+        return true;
+    } catch (error: any) {
+        const msg = String(error?.message || error || "");
+        // 只有文件名/路径不合法才值得换名字重试，其他错误（如配额、网络）直接透出
+        if (/invalid file path|putFile/i.test(msg)) return false;
+        throw error;
+    }
 }
 
 export async function uploadCover(
@@ -344,16 +392,23 @@ export async function uploadCover(
     const mime = match[1];
     const extMap: Record<string, string> = { jpeg: "jpg", "x-icon": "ico", "svg+xml": "svg" };
     const ext = extMap[mime.split("/")[1]] || mime.split("/")[1] || "jpg";
-    const fileName = `${safeFileName(title)}_${generateBlockId()}.${ext}`;
-    const relativePath = `${coverDir.replace(/^\/+/, "")}/${type}/${fileName}`;
     const byteString = atob(match[2]);
     const bytes = new Uint8Array(byteString.length);
     for (let i = 0; i < byteString.length; i++) {
         bytes[i] = byteString.charCodeAt(i);
     }
-    const formData = new FormData();
-    formData.append("path", `/data/${relativePath}`);
-    formData.append("file", new File([bytes], fileName, { type: mime }));
-    await apiPost("/api/file/putFile", formData);
-    return relativePath;
+
+    const id = generateBlockId();
+    const dir = (coverDir || "assets/媒体封面").replace(/^\/+/, "");
+    // 依次尝试：带清洗标题 → 纯 ASCII 文件名。避免标题中的罕见不可打印字符
+    // 触发内核 FilterUploadFileName 校验（issue #14658）。
+    const candidates = [`${safeFileName(title)}_${id}.${ext}`, `cover_${id}.${ext}`];
+    for (const fileName of candidates) {
+        const relativePath = `${dir}/${type}/${fileName}`;
+        if (await tryPutCover(relativePath, fileName, bytes, mime)) {
+            return relativePath;
+        }
+    }
+    console.warn("[豆瓣媒体导入助手] 封面上传失败，改用豆瓣原始链接:", title, remoteUrl);
+    return remoteUrl || "";
 }
