@@ -2,7 +2,7 @@
   "name": "siyuan-media-importer",
   "author": "Myisking",
   "url": "https://github.com/SuperShinningFinger/siyuan-douban-media-importer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "readme": {
     "default": "README.md",
     "zh_CN": "README.md"
@@ -25,21 +25,22 @@
     "desktop-window"
   ],
   "displayName": {
-    "en_US": "Douban Media Importer",
-    "zh_CN": "豆瓣书影音导入助手"
+    "en_US": "Douban Media Import Assistant",
+    "zh_CN": "豆瓣媒体导入助手"
   },
   "description": {
-    "en_US": "Import book, movie, TV/anime and music info from Douban into SiYuan databases, and generate note templates.",
-    "zh_CN": "从豆瓣导入书籍、电影、电视剧/动画、音乐信息到思源数据库，并生成感想笔记模板。"
+    "en_US": "Import book, movie, TV/anime, music and game info from Douban into SiYuan databases, and generate note templates.",
+    "zh_CN": "从豆瓣导入书籍、电影、电视剧/动画、音乐、游戏信息到思源数据库，并生成感想笔记模板。"
   },
   "keywords": [
     "豆瓣",
-    "书影音",
+    "媒体",
     "书籍",
     "电影",
     "电视剧",
     "动画",
     "音乐",
+    "游戏",
     "数据库"
   ]
 }

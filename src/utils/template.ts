@@ -40,6 +40,10 @@ export const TEMPLATE_VARIABLES: Array<{ name: string; label: string }> = [
     { name: "musicType", label: "音乐类型" },
     { name: "aka", label: "又名" },
     { name: "url", label: "豆瓣详情页链接" },
+    { name: "platforms", label: "游戏平台" },
+    { name: "developers", label: "游戏开发商" },
+    { name: "publishers", label: "游戏发行商" },
+    { name: "gameType", label: "游戏类型" },
 ];
 
 /**
@@ -145,6 +149,7 @@ export function renderNoteMarkdown(template: string, info: MediaInfo, coverPath:
         "originalTitle", "subtitle", "directors", "writers", "cast", "genres",
         "regions", "languages", "releaseDate", "runtime", "episodes", "imdb",
         "artist", "album", "musicType", "aka",
+        "platforms", "developers", "publishers", "gameType",
     ]) {
         context[field] = joinValue((info as any)[field]);
     }

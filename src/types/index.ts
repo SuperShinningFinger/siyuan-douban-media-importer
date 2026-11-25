@@ -1,4 +1,4 @@
-export type MediaType = "book" | "movie" | "tv" | "music";
+export type MediaType = "book" | "movie" | "tv" | "music" | "game";
 
 export interface MediaInfo {
     type: MediaType;
@@ -30,6 +30,11 @@ export interface MediaInfo {
     artist?: string;
     album?: string;
     musicType?: string;
+    // 游戏专属
+    platforms?: string[];
+    developers?: string[];
+    publishers?: string[];
+    gameType?: string[];
 }
 
 export interface MediaSettings {
@@ -45,6 +50,7 @@ export const MEDIA_LABELS: Record<MediaType, string> = {
     movie: "电影",
     tv: "电视剧／动画",
     music: "音乐",
+    game: "游戏",
 };
 
 export const DOUBAN_HOME: Record<MediaType, string> = {
@@ -52,6 +58,7 @@ export const DOUBAN_HOME: Record<MediaType, string> = {
     movie: "https://movie.douban.com/",
     tv: "https://movie.douban.com/tv/",
     music: "https://music.douban.com/",
+    game: "https://www.douban.com/game/",
 };
 
 export const DEFAULT_SETTINGS: MediaSettings = {
@@ -63,5 +70,6 @@ export const DEFAULT_SETTINGS: MediaSettings = {
         movie: { avId: "20261123202021-qnajmhm", notePath: "/豆瓣电影" },
         tv: { avId: "20261123202021-juohgij", notePath: "/豆瓣电视剧／动画" },
         music: { avId: "20261123202021-twwcz34", notePath: "/音乐笔记" },
+        game: { avId: "", notePath: "/豆瓣游戏" },
     },
 };

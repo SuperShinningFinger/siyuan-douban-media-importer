@@ -12,6 +12,7 @@
     import { buildExtractor, extractFromHtml } from "../utils/extractor";
     import { DEFAULT_TEMPLATE, TEMPLATE_VARIABLES } from "../utils/template";
     import {
+        DoubanChallengeError,
         fetchImageAsDataUrl,
         fetchTextViaProxy,
         listAttributeViews,
@@ -26,7 +27,6 @@
     let type: MediaType = "book";
     let settings: MediaSettings = DEFAULT_SETTINGS;
     let webview: any = null;
-    let eventsAttached = false;
     let currentUrl: string = DOUBAN_HOME.book;
     let showBrowser = false;
     let info: MediaInfo | null = null;
@@ -47,7 +47,7 @@
         ? avList.filter((av) => av.hPath.split("/").filter(Boolean)[0] === currentNotebookName)
         : avList;
 
-    const mediaTypes: MediaType[] = ["book", "movie", "tv", "music"];
+    const mediaTypes: MediaType[] = ["book", "movie", "tv", "music", "game"];
     // 内置浏览器是 Electron 专有能力，仅桌面端可用；Docker / 手机 / 浏览器前端走 URL 抓取
     const frontend = getFrontend();
     const hasWebview = frontend === "desktop" || frontend === "desktop-window";
@@ -57,6 +57,67 @@
     // 用 Edge UA（实测 Edge 能正常显示豆瓣封面），减少豆瓣对嵌入式浏览器的拦截
     const browserUA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
+    // 豆瓣移动版基本不触发桌面版的 JS 工作量证明验证，作为 URL 抓取的兜底入口。
+    const mobileUA =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+
+    /** 桌面版被验证页拦截时，按媒体类型映射到豆瓣移动版详情页。 */
+    function mobileUrlFor(url: string, type: MediaType): string {
+        try {
+            const u = new URL(url);
+            if (u.hostname === "m.douban.com") return "";
+            const match = u.pathname.match(/\/subject\/(\d+)/);
+            if (!match) return ""; // 游戏页移动端没有对应路由
+            const category = type === "book" ? "book" : type === "music" ? "music" : "movie";
+            return `https://m.douban.com/${category}/subject/${match[1]}/`;
+        } catch {
+            return "";
+        }
+    }
+
+    // 注入到豆瓣页面的链接守卫：把豆瓣新窗口打开改为当前 webview 内导航。
+    // 游戏详情页走 window.open / target="_blank"，部分不触发 new-window 事件，
+    // 必须在页面源头改写，才能彻底避免跳出插件。非豆瓣外链保持默认行为。
+    const LINK_GUARD_SCRIPT = `(() => {
+        if (window.__miLinkGuard) return;
+        window.__miLinkGuard = true;
+        // 捕获阶段拦截所有 target="_blank" 链接（含脚本动态生成的节点），一律当前窗口导航。
+        // 在插件内打开的所有链接都应留在 webview，游戏详情页链接域名不固定，故不限豆瓣。
+        document.addEventListener("click", (e) => {
+            const t = e.target;
+            const a = t && t.closest ? t.closest('a[target="_blank"]') : null;
+            if (!a) return;
+            const href = a.href;
+            if (!href || !/^https?:/i.test(href)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            location.href = href;
+        }, true);
+        // 把所有 target="_blank" 就地改为 _self（应对非 click 触发的跳转）
+        const neutralize = (root) => {
+            try {
+                (root.querySelectorAll ? root.querySelectorAll('a[target="_blank"]') : []).forEach((a) => {
+                    a.setAttribute("target", "_self");
+                });
+            } catch (e) {}
+        };
+        neutralize(document);
+        try {
+            new MutationObserver((records) => {
+                for (const r of records) {
+                    if (r.addedNodes) r.addedNodes.forEach((n) => { if (n.nodeType === 1) neutralize(n); });
+                }
+            }).observe(document.documentElement || document, { childList: true, subtree: true });
+        } catch (e) {}
+        // 覆盖 window.open：一律当前窗口导航
+        window.open = function (url) {
+            if (typeof url === "string" && /^https?:/i.test(url)) {
+                location.href = url;
+                return null;
+            }
+            return null;
+        };
+    })()`;
 
     onMount(async () => {
         settings = await plugin.getSettings();
@@ -146,13 +207,34 @@
         }
     }
 
-    $: if (webview && !eventsAttached) {
-        eventsAttached = true;
-        const updateUrl = (event: any) => {
-            if (event?.url) currentUrl = event.url;
-        };
-        webview.addEventListener("did-navigate", updateUrl);
-        webview.addEventListener("did-navigate-in-page", updateUrl);
+    // webview 是 {#if} 内动态创建的元素，事件必须直接绑在模板上（见 webview 标签），
+    // 不能依赖 $: 响应式块 + eventsAttached，否则元素创建时绑定可能不生效。
+    function updateUrl(event: any) {
+        if (event?.url) currentUrl = event.url;
+    }
+
+    // 每次页面文档就绪后注入链接守卫：把新窗口打开改为当前 webview 导航。
+    // 用 dom-ready + did-finish-load 双保险；豆瓣游戏详情页链接走 window.open / target=_blank。
+    function guardLinks() {
+        if (webview && typeof webview.executeJavaScript === "function") {
+            webview.executeJavaScript(LINK_GUARD_SCRIPT).catch(() => {});
+        }
+    }
+
+    // 拦截所有新窗口（不只豆瓣）：在插件内打开的链接都留在 webview 里，
+    // 尤其游戏详情页链接可能指向非常规域名，限定豆瓣会漏掉。
+    function onNewWindow(event: any) {
+        const url = event?.url || "";
+        event.preventDefault?.();
+        try {
+            if (event.window && typeof event.window.close === "function") event.window.close();
+        } catch {
+            // 忽略关闭失败
+        }
+        if (url && webview && typeof webview.loadURL === "function") {
+            webview.loadURL(url);
+            status = `已在当前浏览器打开：${url.slice(0, 80)}`;
+        }
     }
 
     function openBrowser() {
@@ -250,19 +332,32 @@
             status = "地址格式不正确，请填入完整地址，例如 https://book.douban.com/subject/1234567/";
             return;
         }
-        if (!/^https?:\/\/(www\.)?[\w-]*douban\.com$/.test(parsedUrl.hostname)) {
-            status = "只有豆瓣页面（douban.com）支持导入。";
+        // hostname 不含协议，这里只能匹配主机部分；支持 douban.com 及任意子域
+        if (!/(^|\.)douban\.com$/i.test(parsedUrl.hostname)) {
+            status = `只有豆瓣页面（douban.com）支持导入，当前域名：${parsedUrl.hostname}`;
             return;
         }
         busy = true;
         status = "正在通过思源后端抓取豆瓣页面……";
         try {
             const referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
-            const html = await fetchTextViaProxy(url, referer);
-            const parsed = extractFromHtml(html, url, type);
+            let parsed: any;
+            try {
+                const html = await fetchTextViaProxy(url, referer);
+                parsed = extractFromHtml(html, url, type);
+            } catch (error: any) {
+                // 桌面版触发验证页 / 页面结构不认识时，自动改抓豆瓣移动版。
+                const needsFallback =
+                    error instanceof DoubanChallengeError || /未识别到条目标题/.test(error?.message || "");
+                const mobile = needsFallback ? mobileUrlFor(url, type) : "";
+                if (!mobile) throw error;
+                status = "桌面页受限，正在尝试豆瓣移动版……";
+                const mobileHtml = await fetchTextViaProxy(mobile, "https://m.douban.com/", mobileUA);
+                parsed = extractFromHtml(mobileHtml, mobile, type);
+            }
             await applyExtracted(parsed, false);
         } catch (error: any) {
-            status = `提取失败：${error?.message || error}。若豆瓣要求验证，请在桌面端使用内置浏览器导入。`;
+            status = `提取失败：${error?.message || error}`;
         } finally {
             busy = false;
         }
@@ -277,6 +372,10 @@
         "genres",
         "regions",
         "languages",
+        "platforms",
+        "developers",
+        "publishers",
+        "gameType",
     ];
 
     function fieldValue(source: MediaInfo, key: string): string {
@@ -323,6 +422,18 @@
                 { key: "runtime", label: "片长/分钟" },
                 { key: "episodes", label: "集数" },
                 { key: "imdb", label: "IMDb" },
+                { key: "summary", label: "简介" },
+            ];
+        }
+        if (source.type === "game") {
+            return [
+                ...common,
+                { key: "gameType", label: "类型" },
+                { key: "platforms", label: "平台" },
+                { key: "developers", label: "开发商" },
+                { key: "publishers", label: "发行商" },
+                { key: "publishDate", label: "发行日期" },
+                { key: "aka", label: "别名" },
                 { key: "summary", label: "简介" },
             ];
         }
@@ -511,9 +622,13 @@
                 bind:this={webview}
                 src={currentUrl}
                 useragent={browserUA}
-                allowpopups="true"
                 class="mi-webview"
                 title="豆瓣"
+                on:did-navigate={updateUrl}
+                on:did-navigate-in-page={updateUrl}
+                on:dom-ready={guardLinks}
+                on:did-finish-load={guardLinks}
+                on:new-window={onNewWindow}
             ></webview>
         {/if}
 

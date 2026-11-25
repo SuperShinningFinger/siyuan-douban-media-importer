@@ -88,6 +88,29 @@ export async function removeAttributeViewBlocks(avId: string, srcIds: string[]):
     await apiPost("/api/av/removeAttributeViewBlocks", { avID: avId, srcIDs: srcIds });
 }
 
+/**
+ * 给属性视图新增一列。keyType 取内核类型名：text/date/number/url/mSelect/mAsset/select。
+ * keyID 必须自行生成且全局唯一；previousKeyID 决定插入位置（追加到末尾时传当前最后一列 ID）。
+ */
+export async function addAttributeViewKey(
+    avId: string,
+    carrierBlockId: string,
+    keyId: string,
+    keyName: string,
+    keyType: string,
+    previousKeyId: string,
+): Promise<void> {
+    await apiPost("/api/av/addAttributeViewKey", {
+        avID: avId,
+        blockID: carrierBlockId,
+        keyID: keyId,
+        keyName,
+        keyType,
+        keyIcon: "",
+        previousKeyID: previousKeyId,
+    });
+}
+
 /** 在指定文档末尾插入一个块（markdown 或 html）。 */
 export async function appendBlock(parentId: string, data: string, dataType: "markdown" | "html" = "markdown"): Promise<void> {
     await apiPost("/api/block/appendBlock", { parentID: parentId, data, dataType });
@@ -206,6 +229,8 @@ export async function fetchImageAsDataUrl(url: string): Promise<string> {
             url,
             method: "GET",
             timeout: 12000,
+            // 与 fetchTextViaProxy 一致：避免内核默认 application/json 触发部分 CDN 网关 400。
+            contentType: "text/plain",
             headers: [
                 {
                     "User-Agent":
@@ -236,19 +261,28 @@ export async function fetchImageAsDataUrl(url: string): Promise<string> {
     }
 }
 
+/** 豆瓣返回 JS 工作量证明验证页，调用方可据此自动改抓移动版。 */
+export class DoubanChallengeError extends Error {
+    readonly code = "DOUBAN_CHALLENGE";
+}
+
 /**
  * 通过思源后端代理抓取网页 HTML 文本（Docker/手机等无 webview 环境用）。
  * forwardProxy 返回 base64 body，这里按 UTF-8 解码成字符串。
  */
-export async function fetchTextViaProxy(url: string, referer?: string): Promise<string> {
+export async function fetchTextViaProxy(url: string, referer?: string, userAgent?: string): Promise<string> {
     if (!url) return "";
     const resp: any = await fetchSyncPost("/api/network/forwardProxy", {
         url,
         method: "GET",
         timeout: 15000,
+        // 内核 forwardProxy 默认把 Content-Type 设为 application/json（哪怕是 GET），
+        // 豆瓣网关 dae 会因此直接返回 400 "Bad Request: <url>"。显式覆盖为 text/plain。
+        contentType: "text/plain",
         headers: [
             {
                 "User-Agent":
+                    userAgent ||
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
             },
             { Referer: referer || "https://www.douban.com/" },
@@ -260,12 +294,30 @@ export async function fetchTextViaProxy(url: string, referer?: string): Promise<
     const data = resp?.data && typeof resp.data === "object" ? resp.data : resp;
     if (!data?.body) throw new Error(`代理返回为空（status ${data?.status || "?"}）`);
     if (data.status && data.status >= 400) {
-        throw new Error(`豆瓣页面请求失败（HTTP ${data.status}），请在桌面端使用内置浏览器导入`);
+        // 附上豆瓣返回的正文片段，便于区分 400（请求头问题）/403（反爬）/404（链接失效）。
+        let detail = "";
+        try {
+            const bin = atob(data.body);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            detail = new TextDecoder("utf-8").decode(bytes).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+        } catch {
+            // 忽略解码失败，只报状态码
+        }
+        throw new Error(
+            `豆瓣页面请求失败（HTTP ${data.status}${detail ? `：${detail}` : ""}），请在桌面端使用内置浏览器导入`,
+        );
     }
     const bin = atob(data.body);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder("utf-8").decode(bytes);
+    const html = new TextDecoder("utf-8").decode(bytes);
+    // 豆瓣反爬有时返回 200 的 JS PoW 验证页（表单字段 sol/cha + sha512 校验），
+    // 此时 HTML 没有条目数据，直接报明确错误，避免提取出空标题。
+    if (/name=["']sol["']/i.test(html) && /sha512/i.test(html)) {
+        throw new DoubanChallengeError("豆瓣要求人机验证");
+    }
+    return html;
 }
 
 function safeFileName(name: string): string {

@@ -16,6 +16,7 @@ export const DEFAULT_NOTE_PATH: Record<MediaType, string> = {
     movie: "/豆瓣电影",
     tv: "/豆瓣电视剧／动画",
     music: "/音乐笔记",
+    game: "/豆瓣游戏",
 };
 
 /** 每种媒体类型的默认数据库名称。 */
@@ -24,6 +25,7 @@ const AV_NAME: Record<MediaType, string> = {
     movie: "电影",
     tv: "电视剧／动画",
     music: "音乐",
+    game: "游戏",
 };
 
 /**

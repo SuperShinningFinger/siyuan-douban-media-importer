@@ -18,9 +18,12 @@ function extractFromDocument(type: string, doc: Document, href: string): string 
     try { pathname = new URL(href).pathname; } catch { pathname = ""; }
     const parts = pathname.split("/").filter(Boolean);
     const subjectIndex = parts.indexOf("subject");
-    const subjectId = subjectIndex >= 0 ? parts[subjectIndex + 1] : "";
+    // 游戏详情页是 /game/{id}/，其余是 /subject/{id}/
+    const gameIndex = parts.indexOf("game");
+    const subjectId = subjectIndex >= 0 ? parts[subjectIndex + 1]
+        : (TYPE === "game" && gameIndex >= 0 ? parts[gameIndex + 1] : "");
     if (!subjectId) {
-        throw new Error("当前不是豆瓣条目详情页，请打开包含 /subject/ 的详情页面");
+        throw new Error("当前不是豆瓣详情页：书籍/电影/音乐需包含 /subject/，游戏需为 /game/{id}/");
     }
 
     const infoEl = doc.querySelector("#info") || doc.querySelector(".subject-info") || doc.body;
@@ -58,14 +61,42 @@ function extractFromDocument(type: string, doc: Document, href: string): string 
         return clean(tx(parent).replace(labelText, ""));
     };
 
+    // 桌面版标题在 h1；移动版（m.douban.com）没有 h1，需从 .sub-title / meta 标签取。
+    const metaContent = (selector: string) => {
+        const el: any = doc.querySelector(selector);
+        return el ? clean(el.getAttribute("content") || "") : "";
+    };
     let title = tx(doc.querySelector('h1 span[property="v:itemreviewed"]'));
     if (!title) {
         const h1span = tx(doc.querySelector("h1 span"));
         title = h1span ? h1span.split(" ")[0] : tx(doc.querySelector("h1"));
     }
+    if (!title) title = tx(doc.querySelector(".sub-title"));
+    if (!title) title = metaContent('meta[itemprop="name"]') || metaContent('meta[property="og:title"]');
+    if (!title) {
+        title = tx(doc.querySelector("title"))
+            .replace(/\s*-\s*(图书|电影|电视剧|音乐|游戏)\s*-\s*豆瓣\s*$/, "")
+            .replace(/\s*-\s*豆瓣\s*$/, "");
+    }
+    if (title === "豆瓣") title = "";
+
+    // 游戏详情页：dt/dd 形式的属性表，取标签对应的值（多个链接用 / 分隔）
+    const attr = (label: string) => {
+        const dts = Array.from(doc.querySelectorAll("dl.thing-attr dt"));
+        const dt = dts.find((d: any) => tx(d).replace(/[:：\s]/g, "") === label.replace(/[:：\s]/g, ""));
+        if (!dt) return "";
+        const dd = dt.nextElementSibling;
+        if (!dd) return "";
+        const links = Array.from(dd.querySelectorAll("a")).map(tx).filter(Boolean);
+        if (links.length) return links.join(" / ");
+        return tx(dd);
+    };
+    const attrList = (label: string) => clean(attr(label)).split(/\s*\/\s*/).map((x) => clean(x)).filter(Boolean);
 
     const coverEl = doc.querySelector("#mainpic img") ||
         doc.querySelector("#mainpic a") ||
+        doc.querySelector(".item-subject-info .pic a img") ||
+        doc.querySelector(".item-subject-info .pic a") ||
         doc.querySelector(".subject img") ||
         doc.querySelector(".cover img");
     let coverUrl = "";
@@ -73,12 +104,18 @@ function extractFromDocument(type: string, doc: Document, href: string): string 
         coverUrl = coverEl.getAttribute("src") ||
             coverEl.getAttribute("data-src") ||
             coverEl.getAttribute("href") || "";
-        coverUrl = coverUrl.split("#")[0].replace(/^http:/, "https:");
     }
+    if (!coverUrl) {
+        coverUrl = metaContent('meta[itemprop="image"]') || metaContent('meta[property="og:image"]');
+    }
+    coverUrl = coverUrl.split("#")[0].replace(/^http:/, "https:");
 
-    const rating = tx(doc.querySelector(".rating_num")) || tx(doc.querySelector('[property="v:average"]'));
+    const rating = tx(doc.querySelector(".rating_num")) ||
+        tx(doc.querySelector('[property="v:average"]')) ||
+        metaContent('meta[itemprop="ratingValue"]');
     const ratingCount = tx(doc.querySelector('[property="v:votes"]')) ||
-        tx(doc.querySelector(".rating_people span")).replace(/[^0-9]/g, "");
+        tx(doc.querySelector(".rating_people span")).replace(/[^0-9]/g, "") ||
+        metaContent('meta[itemprop="reviewCount"]');
 
     // 豆瓣简介常有两份：.short（末尾带"(展开全部)"）和 .all.hidden（完整版）。
     // 优先取完整版；取文本前移除"展开全部"这类跳转链接，避免混进简介。
@@ -94,7 +131,11 @@ function extractFromDocument(type: string, doc: Document, href: string): string 
         summaryText(doc.querySelector('[property="v:summary"]')) ||
         summaryText(doc.querySelector("#link-report .intro")) ||
         summaryText(doc.querySelector("#link-report-inner .intro")) ||
-        summaryText(doc.querySelector(".subject-abstract"));
+        summaryText(doc.querySelector(".subject-abstract")) ||
+        summaryText(doc.querySelector(".subject-intro .bd p")) ||
+        summaryText(doc.querySelector(".section-intro_desc")) ||
+        summaryText(doc.querySelector(".subject-section_intro p")) ||
+        (TYPE === "game" ? summaryText(doc.querySelector("#link-report p")) : "");
     summary = (summary || "")
         .replace(/[（(]\s*展开(全部|更多)\s*[）)]?/g, "")
         .replace(/展开(全部|更多)/g, "")
@@ -144,6 +185,38 @@ function extractFromDocument(type: string, doc: Document, href: string): string 
         data.musicType = field("介质") || field("类型");
         data.regions = toList(field("地区"));
         data.languages = toList(field("语言"));
+    } else if (TYPE === "game") {
+        data.gameType = attrList("类型");
+        data.platforms = attrList("平台");
+        data.aka = attr("别名");
+        data.developers = attrList("开发商");
+        data.publishers = attrList("发行商");
+        data.publishDate = attr("发行日期") || attr("预计上市时间");
+        data.genres = data.gameType;
+    }
+
+    // 移动版没有 #info 表，简介字段放在 .sub-meta 里，按 “/” 拆分兜底补齐常用字段。
+    const subMeta = tx(doc.querySelector(".sub-info .sub-meta"));
+    if (subMeta) {
+        const bits = subMeta.split("/").map((x: string) => clean(x)).filter(Boolean);
+        if (TYPE === "book") {
+            if (!data.publisher && bits[0]) data.publisher = bits[0];
+            if (!data.publishDate && bits[1]) data.publishDate = bits[1].replace(/出版$/, "");
+        } else if (TYPE === "movie" || TYPE === "tv") {
+            if (!data.regions.length && bits[0]) data.regions = [bits[0]];
+            if (!data.genres.length) {
+                data.genres = bits.filter((b: string) => !/(上映|首播|片长|分钟|\d{4}-\d{1,2}-\d{1,2})/.test(b) && b !== bits[0]);
+            }
+            const showDate = bits.find((b: string) => /(上映|首播)/.test(b));
+            if (!data.releaseDate && showDate) data.releaseDate = showDate;
+            const runtime = bits.find((b: string) => /^片长/.test(b));
+            if (!data.runtime && runtime) data.runtime = runtime.replace(/[^0-9]/g, "");
+        } else if (TYPE === "music") {
+            if (!data.artist && bits[0]) data.artist = bits[0];
+            if (!data.authors.length && bits[0]) data.authors = [bits[0]];
+            const release = bits.find((b: string) => /发行|出版/.test(b));
+            if (!data.publishDate && release) data.publishDate = release.replace(/(发行|出版)$/, "");
+        }
     }
 
     if (!data.title) {

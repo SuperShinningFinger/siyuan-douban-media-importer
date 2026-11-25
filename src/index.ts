@@ -18,7 +18,7 @@ export default class MediaImporterPlugin extends Plugin {
 
         this.addTopBar({
             icon: "iconMediaImporter",
-            title: "豆瓣书影音导入助手",
+            title: "豆瓣媒体导入助手",
             position: "right",
             callback: () => this.openPanel(),
         });
@@ -54,7 +54,7 @@ export default class MediaImporterPlugin extends Plugin {
         // 遮罩）写内联样式或用 !important 覆盖，否则会破坏全局弹窗布局。
         const { width, height } = this.computeDialogSize();
         const dialog = new Dialog({
-            title: "豆瓣书影音导入助手",
+            title: "豆瓣媒体导入助手",
             content: `<div class="mi-dialog-root" style="width:100%;height:100%;min-height:0;"></div>`,
             width,
             height,
